@@ -140,4 +140,4 @@ This is an independent implementation of the RSCP protocol based on publicly ava
 
 ## License
 
-No license file is currently included in the repository; contact the author before redistribution.
+The code is distributed under MIT license. See LICENSE file for details.
