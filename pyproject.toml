@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rscp_lib"
+version = "1.0.0"
+description = "Asyncio Python client for E3/DC's RSCP (Remote Storage Control Protocol)"
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [{ name = "Tobias Terhaar" }]
+dependencies = ["py3rijndael"]
+
+[project.optional-dependencies]
+test = ["pytest>=7", "pytest-asyncio>=0.21", "pytest-cov", "coverage"]
+
+[tool.setuptools.packages.find]
+include = ["rscp_lib*"]
+exclude = ["tests*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.coverage.run]
+source = ["rscp_lib"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+precision = 2
