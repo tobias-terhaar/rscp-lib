@@ -8,11 +8,33 @@ version = "1.0.0"
 description = "Asyncio Python client for E3/DC's RSCP (Remote Storage Control Protocol)"
 readme = "README.md"
 requires-python = ">=3.9"
-authors = [{ name = "Tobias Terhaar" }]
+license = { file = "LICENSE" }
+authors = [{ name = "Tobias Terhaar", email = "31091813+tobias-terhaar@users.noreply.github.com" }]
+keywords = ["e3dc", "rscp", "home-assistant", "asyncio", "energy", "solar"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Framework :: AsyncIO",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Home Automation",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
 dependencies = ["py3rijndael"]
 
 [project.optional-dependencies]
 test = ["pytest>=7", "pytest-asyncio>=0.21", "pytest-cov", "coverage"]
+
+[project.urls]
+Homepage = "https://github.com/tobias-terhaar/rscp-lib"
+Issues = "https://github.com/tobias-terhaar/rscp-lib/issues"
+Repository = "https://github.com/tobias-terhaar/rscp-lib"
 
 [tool.setuptools.packages.find]
 include = ["rscp_lib*"]
