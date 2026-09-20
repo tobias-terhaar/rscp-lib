@@ -346,3 +346,39 @@ def test_get_header_size_and_data_length_helpers():
     packed = v.pack()
     assert RscpValue.getHeaderSize() == struct.calcsize("<IBH")
     assert RscpValue.getDataLength(packed) == 3
+
+
+@pytest.mark.parametrize(
+    "tag_name",
+    [
+        "TAG_WB_PM_POWER_L1",
+        "TAG_WB_PM_POWER_L2",
+        "TAG_WB_PM_POWER_L3",
+        "TAG_WB_PM_ENERGY_L1",
+        "TAG_WB_PM_ENERGY_L2",
+        "TAG_WB_PM_ENERGY_L3",
+    ],
+)
+def test_unpack_wallbox_power_meter_as_int32(tag_name):
+    # The E3/DC "One Storage" firmware sends the wallbox power-meter tags as
+    # Int32 (0x06) instead of the declared Double64 (0x0B); type_variable
+    # lets the wire type win instead of raising.
+    tag_code = RscpTags.rscpTags[tag_name]["tagvalue"]
+    buf = _pack_header(tag_code, 0x06, 4) + struct.pack("<i", 2300)
+    v = RscpValue().withBuffer(buf)
+    assert v.getValue() == 2300
+
+
+@pytest.mark.parametrize(
+    "tag_name",
+    [
+        "TAG_WB_PM_POWER_L1",
+        "TAG_WB_PM_ENERGY_L1",
+    ],
+)
+def test_unpack_wallbox_power_meter_as_double64(tag_name):
+    # S10 devices keep sending the declared Double64 — must still work.
+    tag_code = RscpTags.rscpTags[tag_name]["tagvalue"]
+    buf = _pack_header(tag_code, 0x0B, 8) + struct.pack("<d", 2300.5)
+    v = RscpValue().withBuffer(buf)
+    assert v.getValue() == 2300.5
