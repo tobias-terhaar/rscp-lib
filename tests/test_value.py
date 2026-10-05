@@ -382,3 +382,20 @@ def test_unpack_wallbox_power_meter_as_double64(tag_name):
     buf = _pack_header(tag_code, 0x0B, 8) + struct.pack("<d", 2300.5)
     v = RscpValue().withBuffer(buf)
     assert v.getValue() == 2300.5
+
+
+@pytest.mark.parametrize(
+    "type_id,fmt,value",
+    [
+        (0x07, "<I", 0x10),  # Uint32, the declared type
+        (0x06, "<i", 0x10),  # Int32
+        (0x0C, "<h", 0x10),  # Bitfield
+    ],
+)
+def test_unpack_ems_sys_status_accepts_any_integer_type(type_id, fmt, value):
+    # TAG_EMS_SYS_STATUS is a bit register; devices differ in the width they
+    # send it with, so the wire type has to win over the declared one.
+    tag_code = RscpTags.rscpTags["TAG_EMS_SYS_STATUS"]["tagvalue"]
+    buf = _pack_header(tag_code, type_id, struct.calcsize(fmt)) + struct.pack(fmt, value)
+    v = RscpValue().withBuffer(buf)
+    assert v.getValue() == value
