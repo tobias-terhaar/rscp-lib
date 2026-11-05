@@ -103,20 +103,61 @@ class RscpConnection:
             raise RscpConnectionException(str(e))
 
     async def receive(self, timeout=1000):
-        _buffer = await self._receive(timeout)
+        """Receive one RSCP response.
 
-        buffer = _buffer
+        TCP is a byte stream, so one ``sock_recv`` call is not guaranteed to
+        contain a complete encrypted RSCP frame.  The first encrypted block
+        contains the complete RSCP header; decrypt it to learn the frame
+        length, then collect and decrypt the remaining cipher blocks.
+        """
+        if not self.__ciphersuite:
+            return await self._receive(timeout)
 
-        if self.__ciphersuite:
-            buffer = self.__ciphersuite.decrypt(_buffer)
-            if buffer is None:
-                log.warning(
-                    "[%s] Decryption failed: len(buffer) == %d",
-                    self.__host,
-                    len(_buffer),
+        block_size = RscpEncryption.BLOCK_SIZE
+        encrypted = b""
+        while len(encrypted) < block_size:
+            chunk = await self._receive(timeout)
+            if not chunk:
+                self.disconnect()
+                raise RscpConnectionException(
+                    "Peer closed the connection before the RSCP frame header arrived"
                 )
+            encrypted += chunk
 
-        return buffer
+        # CBC can only decrypt complete blocks.  The header is 18 bytes and
+        # therefore always fits into the first Rijndael block.
+        first_block = encrypted[:block_size]
+        plaintext = self.__ciphersuite.decrypt(first_block)
+        if plaintext is None:
+            raise RscpConnectionException("Could not decrypt the RSCP frame header")
+
+        try:
+            frame_length = RscpFrame.getFrameLength(plaintext)
+        except ValueError as err:
+            raise RscpConnectionException(
+                "Could not read the RSCP frame header"
+            ) from err
+
+        encrypted_frame_length = (
+            (frame_length + block_size - 1) // block_size
+        ) * block_size
+        while len(encrypted) < encrypted_frame_length:
+            chunk = await self._receive(timeout)
+            if not chunk:
+                self.disconnect()
+                raise RscpConnectionException(
+                    "Peer closed the connection before the complete RSCP frame arrived"
+                )
+            encrypted += chunk
+
+        remaining_ciphertext = encrypted[block_size:encrypted_frame_length]
+        if remaining_ciphertext:
+            remaining_plaintext = self.__ciphersuite.decrypt(remaining_ciphertext)
+            if remaining_plaintext is None:
+                raise RscpConnectionException("Could not decrypt the RSCP frame body")
+            plaintext += remaining_plaintext
+
+        return plaintext
 
     async def _receive(self, timeout):
         try:
