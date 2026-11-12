@@ -168,7 +168,13 @@ async def test_send_and_receive_with_cipher(mock_sock):
 
     # Build the encrypted payload as the peer would see it
     peer_cipher = RscpEncryption("pw")
-    response_plain = b"R" * 32
+    response_plain = RscpFrame().packFrame(
+        [
+            RscpValue().withTagName("TAG_EMS_REQ_POWER_PV", None),
+            RscpValue().withTagName("TAG_EMS_REQ_POWER_BAT", None),
+        ]
+    )
+    assert len(response_plain) == RscpEncryption.BLOCK_SIZE
     response_encrypted = peer_cipher.encrypt(response_plain)
 
     sent = []
@@ -195,18 +201,138 @@ async def test_send_and_receive_with_cipher(mock_sock):
     assert received == response_plain
 
 
-async def test_receive_with_cipher_bad_length_returns_none(mock_sock, caplog):
+async def test_receive_with_cipher_reassembles_a_fragmented_frame(mock_sock):
     await _connect_ok()
     loop = asyncio.get_running_loop()
 
+    values = [
+        RscpValue().withTagName("TAG_EMS_REQ_POWER_PV", None) for _ in range(3)
+    ]
+    response_plain = RscpFrame().packFrame(values)
+    peer_cipher = RscpEncryption("pw")
+    response_encrypted = peer_cipher.encrypt(response_plain)
+    assert len(response_encrypted) == RscpEncryption.BLOCK_SIZE * 2
+    chunks = iter(
+        (
+            response_encrypted[: RscpEncryption.BLOCK_SIZE],
+            response_encrypted[RscpEncryption.BLOCK_SIZE :],
+        )
+    )
+
     async def fake_recv(sock, n):
-        return b"short"  # not a multiple of BLOCK_SIZE
+        return next(chunks)
 
     loop.sock_recv = fake_recv
 
     c = RscpConnection("h", ciphersuite=RscpEncryption("pw"))
     await c.connect()
-    assert await c.receive() is None
+    received = await c.receive()
+
+    assert received[: len(response_plain)] == response_plain
+
+
+async def test_receive_with_cipher_raises_when_peer_closes_mid_frame(mock_sock):
+    await _connect_ok()
+    loop = asyncio.get_running_loop()
+
+    values = [
+        RscpValue().withTagName("TAG_EMS_REQ_POWER_PV", None) for _ in range(3)
+    ]
+    encrypted_response = RscpEncryption("pw").encrypt(RscpFrame().packFrame(values))
+
+    chunks = iter((encrypted_response[: RscpEncryption.BLOCK_SIZE], b""))
+
+    async def fake_recv(sock, n):
+        return next(chunks)
+
+    loop.sock_recv = fake_recv
+
+    c = RscpConnection("h", ciphersuite=RscpEncryption("pw"))
+    await c.connect()
+
+    with pytest.raises(RscpConnectionException, match="complete RSCP frame"):
+        await c.receive()
+
+
+async def test_receive_with_cipher_wrong_key_raises_instead_of_hanging(mock_sock):
+    await _connect_ok()
+    loop = asyncio.get_running_loop()
+
+    # Peer encrypts with a different key -> decrypted header is garbage.
+    encrypted_response = RscpEncryption("other-key").encrypt(_non_auth_response())
+    calls = []
+
+    async def fake_recv(sock, n):
+        calls.append(n)
+        if len(calls) > 1:
+            raise AssertionError("receive() must not wait for more data")
+        return encrypted_response
+
+    loop.sock_recv = fake_recv
+
+    c = RscpConnection("h", ciphersuite=RscpEncryption("pw"))
+    await c.connect()
+
+    with pytest.raises(RscpConnectionException, match="magic"):
+        await c.receive()
+    assert not c.is_connected()
+
+
+async def test_receive_with_cipher_keeps_bytes_of_the_next_frame(mock_sock):
+    await _connect_ok()
+    loop = asyncio.get_running_loop()
+
+    frame_1 = RscpFrame().packFrame(
+        [RscpValue().withTagName("TAG_EMS_REQ_POWER_PV", None) for _ in range(3)]
+    )
+    frame_2 = _auth_response(level=10)
+    peer_cipher = RscpEncryption("pw")
+    encrypted_1 = peer_cipher.encrypt(frame_1)
+    encrypted_2 = peer_cipher.encrypt(frame_2)
+    split = len(encrypted_1) + RscpEncryption.BLOCK_SIZE // 2
+
+    # Frame 1 plus half of frame 2's first block arrive together, the rest later.
+    stream = encrypted_1 + encrypted_2
+    chunks = iter((stream[:split], stream[split:]))
+
+    async def fake_recv(sock, n):
+        return next(chunks)
+
+    loop.sock_recv = fake_recv
+
+    c = RscpConnection("h", ciphersuite=RscpEncryption("pw"))
+    await c.connect()
+
+    received_1 = await c.receive()
+    received_2 = await c.receive()
+
+    assert received_1[: len(frame_1)] == frame_1
+    assert received_2[: len(frame_2)] == frame_2
+
+
+async def test_receive_with_cipher_two_frames_in_one_chunk(mock_sock):
+    await _connect_ok()
+    loop = asyncio.get_running_loop()
+
+    frame_1 = _non_auth_response()
+    frame_2 = _auth_response(level=10)
+    peer_cipher = RscpEncryption("pw")
+    stream = peer_cipher.encrypt(frame_1) + peer_cipher.encrypt(frame_2)
+    calls = []
+
+    async def fake_recv(sock, n):
+        calls.append(n)
+        if len(calls) > 1:
+            raise AssertionError("second frame must come from the buffer")
+        return stream
+
+    loop.sock_recv = fake_recv
+
+    c = RscpConnection("h", ciphersuite=RscpEncryption("pw"))
+    await c.connect()
+
+    assert (await c.receive())[: len(frame_1)] == frame_1
+    assert (await c.receive())[: len(frame_2)] == frame_2
 
 
 async def test_send_oserror_disconnects_and_raises(mock_sock):
