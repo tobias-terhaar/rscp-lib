@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import socket
+import struct
 
 from .RscpEncryption import RscpEncryption
 from .RscpFrame import RscpFrame
@@ -14,6 +15,8 @@ class RscpConnectionException(Exception):
 
 
 class RscpConnection:
+    FRAME_MAGIC = 0xDCE3
+
     def __init__(
         self,
         host,
@@ -29,6 +32,9 @@ class RscpConnection:
         self.__password = password
         self.__auth_level = 0
         self.__clientsock = None
+        # Ciphertext received after the end of the last frame; it belongs to
+        # the next frame and must be decrypted in order to keep the CBC IV chain.
+        self.__rx_buffer = b""
 
     async def connect(self):
         if self.is_connected():
@@ -57,6 +63,7 @@ class RscpConnection:
             raise RscpConnectionException(str(e)) from e
 
         self.__clientsock = client_socket
+        self.__rx_buffer = b""
         log.info("Connection established")
 
         if self.__ciphersuite:
@@ -75,6 +82,7 @@ class RscpConnection:
             self.__clientsock = None
             self.__auth_level = 0
             log.info("Connection closed")
+        self.__rx_buffer = b""
 
     async def send(self, buffer):
         if self.__ciphersuite:
@@ -114,13 +122,14 @@ class RscpConnection:
             return await self._receive(timeout)
 
         block_size = RscpEncryption.BLOCK_SIZE
-        encrypted = b""
+        encrypted = self.__rx_buffer
+        self.__rx_buffer = b""
         while len(encrypted) < block_size:
             chunk = await self._receive(timeout)
             if not chunk:
                 self.disconnect()
                 raise RscpConnectionException(
-                    "Peer closed the connection before the RSCP frame header arrived"
+                    "Peer closed the connection before the RSCP frame header arrived - RSCP Key wrong?"
                 )
             encrypted += chunk
 
@@ -129,11 +138,28 @@ class RscpConnection:
         first_block = encrypted[:block_size]
         plaintext = self.__ciphersuite.decrypt(first_block)
         if plaintext is None:
-            raise RscpConnectionException("Could not decrypt the RSCP frame header")
+            self.disconnect()
+            raise RscpConnectionException("Could not decrypt the RSCP frame header - RSCP Key wrong?")
+
+        # Validate the header before trusting its length field: with a wrong
+        # RSCP key (or a desynchronised stream) the "header" is random bytes
+        # and we would otherwise wait for up to 64 KiB that never arrive.
+        (magic,) = struct.unpack_from("<H", plaintext)
+        if magic != self.FRAME_MAGIC:
+            log.warning(
+                "[%s] Invalid RSCP frame magic 0x%04X (wrong RSCP key?)",
+                self.__host,
+                magic,
+            )
+            self.disconnect()
+            raise RscpConnectionException(
+                f"Invalid RSCP frame magic 0x{magic:04X} (wrong RSCP key?)"
+            )
 
         try:
             frame_length = RscpFrame.getFrameLength(plaintext)
         except ValueError as err:
+            self.disconnect()
             raise RscpConnectionException(
                 "Could not read the RSCP frame header"
             ) from err
@@ -150,10 +176,14 @@ class RscpConnection:
                 )
             encrypted += chunk
 
+        # Anything beyond this frame is the start of the next frame: keep it.
+        self.__rx_buffer = encrypted[encrypted_frame_length:]
+
         remaining_ciphertext = encrypted[block_size:encrypted_frame_length]
         if remaining_ciphertext:
             remaining_plaintext = self.__ciphersuite.decrypt(remaining_ciphertext)
             if remaining_plaintext is None:
+                self.disconnect()
                 raise RscpConnectionException("Could not decrypt the RSCP frame body")
             plaintext += remaining_plaintext
 
