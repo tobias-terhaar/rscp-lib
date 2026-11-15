@@ -58,6 +58,26 @@ def test_cstring_roundtrip():
     assert v.getValue() == "alice"
 
 
+def test_cstring_with_multibyte_characters_roundtrip():
+    # "Wärmepumpe" is 10 characters but 11 bytes in UTF-8; the length on the
+    # wire must be the byte length or the following values are misaligned.
+    packed = RscpValue().withTagName("TAG_PM_DEVICE_NAME", "Wärmepumpe").pack()
+    assert len(packed) == 7 + len("Wärmepumpe".encode())
+    v = RscpValue().withBuffer(packed)
+    assert v.getValue() == "Wärmepumpe"
+    assert v.getPackedDataSize() == len(packed)
+
+
+def test_container_with_multibyte_cstring_keeps_following_values():
+    index = RscpValue().withTagName("TAG_PM_INDEX", 2)
+    name = RscpValue().withTagName("TAG_PM_DEVICE_NAME", "Wärmepumpe")
+    pm_type = RscpValue().withTagName("TAG_PM_TYPE", 4)
+    packed = RscpValue().withTagName("TAG_PM_DATA", [index, name, pm_type]).pack()
+    v = RscpValue().withBuffer(packed)
+    assert v.get_child("TAG_PM_DEVICE_NAME").getValue() == "Wärmepumpe"
+    assert v.get_child("TAG_PM_TYPE").getValue() == 4
+
+
 def test_none_type_roundtrip():
     packed = RscpValue().withTagName("TAG_EMS_REQ_POWER_PV", None).pack()
     v = RscpValue().withBuffer(packed)
