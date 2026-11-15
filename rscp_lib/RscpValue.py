@@ -217,7 +217,7 @@ class RscpValue:
             data_fmt = RscpTypes[self.__type]["fmt"]
             if data_fmt == "s":
                 # if the data format is a string, we need to calculate the string length
-                data_fmt = f"{len(self.__value)}s"
+                data_fmt = f"{len(self.__value.encode())}s"
             data_size = struct.calcsize(data_fmt)
 
         return header_size + data_size
@@ -235,9 +235,11 @@ class RscpValue:
             data = tag_code, type_identifier, data_length
         elif data_fmt == "s":
             if type_name == "CString":
-                data_length = len(self.__value)
+                # the length on the wire is in bytes, not characters
+                encoded = self.__value.encode()
+                data_length = len(encoded)
                 data_fmt = "{}s".format(data_length)
-                data = tag_code, type_identifier, data_length, self.__value.encode()
+                data = tag_code, type_identifier, data_length, encoded
             elif type_name == "Container":
                 if not isinstance(self.__value, list):
                     raise ValueError("container requires list of RscpValues as value")
